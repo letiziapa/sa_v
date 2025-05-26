@@ -36,16 +36,17 @@ channels = ['V1:Sa_' + tower + '_F0_LVDT_V_500Hz',
 f = h5py.File("SaSR_test.hdf5", "r")
 dset = f['SR/V1:ENV_CEB_SEIS_V_dec']
 seism = f['SR/V1:ENV_CEB_SEIS_V_dec'][:] #seismic data
-#seism = seism  #remove the first 2000 samples?
+seism = seism[2000:]  #remove the first 2000 samples
 
 #constants
 nperseg = 2 ** 16 #samples per segment (useful for the PSD)
-T = 1800 #signal duration in seconds
+#T = 1800 #signal duration in seconds
+T = 1768 #since we have removed the first 2000 samples, the signal duration is reduced
 # dt = 1/62.5 #sampling frequency
 t = np.linspace(0, T, len(seism)) #time vector
 
-#parameters from noControl.py to be used in the time evolution
-dt = 1e-3 #time step
+#parameter to be used in the time evolution
+dt = 0.001 #time step
 
 #take the fourier transform of the data
 ftransform = np.fft.fft(seism)
@@ -71,7 +72,7 @@ fZ, psdZ = signal.welch(zt.real, fs = 62.5, window='hann', nperseg=nperseg)
 
 
 def force_function(t, mass, acceleration):
-    return mass * np.real(acceleration) * 10e-6
+    return mass * np.real(acceleration) 
 
 def evolution(evol_method, Nt_step, dt, physical_params, signal_params,
               F, file_name = None):
@@ -104,7 +105,8 @@ def evolution(evol_method, Nt_step, dt, physical_params, signal_params,
     """
     # Initialize the problem
     tmax = Nt_step * dt  # maximum time
-    tt = np.arange(0, tmax, dt)  # time grid
+    # tt = np.arange(0, tmax, dt)  # time grid
+    tt = np.arange(0, 1768, 1/62.5) #time grid based on the sampling frequency
     y0 = np.array(
         (0, 0, 0, 0, 0, 0, 0., 0., 0., 0., 0., 0.))  # initial condition
     y_t = np.copy(y0)  # create a copy to evolve it in time
@@ -149,43 +151,44 @@ def evolution(evol_method, Nt_step, dt, physical_params, signal_params,
             np.array(v5), np.array(v6), np.array(x1), np.array(x2),
             np.array(x3), np.array(x4), np.array(x5), np.array(x6))
 
-# def test_force(tt, amplitude=1.0, freq=0.16):
-#     return amplitude * np.sin(2 * np.pi * freq)
+Nt_step = At.size  # temporal steps
+
+#physical parameters of the system
+gamma = [5, 5, 5, 5, 5]  # viscous friction coeff [kg/m*s]
+M = [160, 125, 120, 110, 325, 82]  # filter mass [Kg]
+K = [700, 1500, 3300, 1500, 3400, 564]  # spring constant [N/m]
+
+F = force_function
+
+freq = np.linspace(1e-3, 3e1, 110500) #frequency vector based on frequencies range from spectra
+wn = 2*np.pi*freq
+
+# Simulation 
+physical_params = [*M, *K, *gamma, dt]
+simulation_params = [AR_model, Nt_step, dt] 
+signal_params = [M[0], At] 
+
+tt, v1, v2, v3, v4, v5, v6, x1, x2, x3, x4, x5, x6 = (
+                        evolution(*simulation_params, physical_params, signal_params,
+                        F, file_name = None))
+
+Tf, poles = TransferFunc(wn, *M, *K, *gamma)
+# Compute the magnitude of the transfer function (from simulation)
+H = (np.real(Tf) ** 2 + np.imag(Tf) ** 2) ** (1 / 2)
+
+#apply a Hanning window to the data to remove spectral leakage
+window = np.hanning(len(seism))
+#input in frequency domain
+xf_in = np.fft.fft(zt*window)
+#output in frequency domain
+xf_out = np.fft.fft(x6*window)
+
+# Experimental transfer function
+#H_exp = xf_out / xf_in
+trfn = xf_out/xf_in
+Hfn = (np.real(trfn) ** 2 + np.imag(trfn) ** 2) ** (1 / 2)
 
 if __name__ == '__main__':
-    SA = f[tower]
-    Nt_step = At.size  # temporal steps
-    dt = 1e-3
-
-    # Parameters of the system
-    gamma = [5, 5, 5, 5, 5]  # viscous friction coeff [kg/m*s]
-    M = [160, 125, 120, 110, 325, 82]  # filter mass [Kg]
-    K = [700, 1500, 3300, 1500, 3400, 564]  # spring constant [N/m]
-
-    F = force_function
-    
-    #freq = np.loadtxt('freq.txt', unpack=True)
-    freq = np.arange(1e-2,1e1,0.003)
-    wn = 2*np.pi*freq
-
-    #print(freq[7]-freq[6])   #0.0030517578125 Hz
-    print(f"At: {len(At)}")
-    # Simulation
-    physical_params = [*M, *K, *gamma, dt]
-    simulation_params = [AR_model, Nt_step, dt] 
-    signal_params = [M[0], At]  
-    #tt = np.linspace(0, Nt_step * dt, Nt_step, endpoint=False)
-    
-    tt, v1, v2, v3, v4, v5, v6, x1, x2, x3, x4, x5, x6 = (
-                            evolution(*simulation_params, physical_params, signal_params,
-                            F, file_name = None))
-    
-    Tf, poles = TransferFunc(wn, *M, *K, *gamma)
-    # Compute the magnitude of the transfer function
-    #(modulus squared) square rooted
-    H = (np.real(Tf) ** 2 + np.imag(Tf) ** 2) ** (1 / 2)
-
-
     #print the structure of the dataset
     print_hdf5_structure(f)
     print_items(dset)
@@ -206,8 +209,7 @@ if __name__ == '__main__':
     plt.legend()
     plt.grid()
     plt.xlabel('Time [s]')
-    plt.savefig('figures/velocity_displacement.png')
-    #plt.show()
+    #plt.savefig('figures/velocity_displacement.png')
 
     plt.figure(figsize=(14, 4))
 
@@ -234,7 +236,7 @@ if __name__ == '__main__':
     plt.grid(which = 'both', axis = 'both')
     plt.legend()
     plt.tight_layout()
-    plt.savefig('figures/amplitude_spectra.png')
+    #plt.savefig('figures/amplitude_spectra.png')
 
     fig = plt.figure(figsize=(9, 5))
     plt.title('Transfer function without control', size=13)
@@ -248,12 +250,7 @@ if __name__ == '__main__':
     #plt.plot(freq, H[0], linestyle='-', linewidth=1, marker='', color='steelblue', label='output $x_1$')
     plt.plot(freq, H[5], linestyle='-', linewidth=1, marker='', color='steelblue', label='output $x_{pl}$')
     plt.legend()
-    plt.savefig('figures/transfer_function_no_control.png')
-    # ------------------------------Plot time evolution------------------------#
-    # # save time evol in a file (for the first and last mass)
-    # np.savetxt(os.path.join(data_dir, 'timeEvol_noControl.txt'),
-    #             np.column_stack((tt, x1, x6)), header='time[s], x1, x6')
-
+    #plt.savefig('figures/transfer_function_no_control.png')
     fig = plt.figure(figsize=(5, 5))
     plt.title('Time evolution', size=13)
     plt.xlabel('Time [s]', size=12)
@@ -268,6 +265,15 @@ if __name__ == '__main__':
     #plt.plot(tt, x5, linestyle='-', linewidth=1, marker='', color='darkmagenta', label='x7, M$_7$')
     plt.plot(tt, x6, linestyle='-', linewidth=1, marker='',color='blue', label='x$_{out}$, M$_{out}$') #ultima massa
     plt.legend()
-    plt.savefig('figures/time_evolution.png')
+    #plt.savefig('figures/time_evolution.png')
+
+    plt.figure(figsize=(8, 5))
+    plt.loglog(freq, H[5], label="Theoretical TF", color="blue")
+    plt.loglog(np.abs(frequencies), np.abs(Hfn), label="Experimental TF", color="red", alpha=0.7)
+    plt.xlabel("Frequency [Hz]")
+    plt.ylabel("Magnitude")
+    plt.grid(True, which='both')
+    plt.legend()
+    plt.title("Transfer Function Comparison")
     plt.show()
 
