@@ -7,7 +7,7 @@ from scipy import signal
 from scipy.signal import butter, filtfilt
 from noControl import matrix, TransferFunc, AR_model
 
-# function that explores the structure of the hdf5 object (me l'ha chiaramente scritta chatgpt ahah)
+#structure of the hdf5 object 
 def print_hdf5_structure(obj, indent=0):
     """Stampa ricorsivamente la struttura di un file HDF5"""
     for key in obj:
@@ -42,26 +42,30 @@ seism = seism[2000:]  #remove the first 2000 samples
 nperseg = 2 ** 16 #samples per segment (useful for the PSD)
 #T = 1800 #signal duration in seconds
 T = 1768 #since we have removed the first 2000 samples, the signal duration is reduced
-# dt = 1/62.5 #sampling frequency
 t = np.linspace(0, T, len(seism)) #time vector
 
 #parameter to be used in the time evolution
 dt = 0.001 #time step
 
+
 #take the fourier transform of the data
 ftransform = np.fft.fft(seism)
 
 #multiply the FT by 2 pi f
+freq = np.linspace(1e-3, 3e1, 110500)
 frequencies = np.fft.fftfreq(len(seism), d = 1/62.5)
     
 X_f = np.zeros_like(ftransform, dtype=complex) #create an array of zeros with the same shape as V
 nonzero = frequencies != 0 #boolean mask: true if freq is not zero
+#nonzero = freq != 0 #boolean mask: true if freq is not zero
 #for all non-zero frequencies, divide the FT by 2 pi f the take the IFT to get the displacement
 X_f[nonzero] = ftransform[nonzero] / (1j * 2 * np.pi * frequencies[nonzero])
+##X_f[nonzero] = ftransform[nonzero] / (1j * 2 * np.pi * freq[nonzero])
 zt = np.fft.ifft(X_f)
 
 #multiply the FT by 2 pi f then take the IFT to get the acceleration
 acc = ftransform * (frequencies * 2 * np.pi * 1j)
+#acc = ftransform * (freq * 2 * np.pi * 1j)
 At = np.fft.ifft(acc)
 
 
@@ -269,11 +273,12 @@ if __name__ == '__main__':
 
     plt.figure(figsize=(8, 5))
     plt.loglog(freq, H[5], label="Theoretical TF", color="blue")
-    plt.loglog(np.abs(frequencies), np.abs(Hfn), label="Experimental TF", color="red", alpha=0.7)
+    plt.loglog(freq, np.abs(Hfn), label="Experimental TF", color="red", alpha=0.7)
     plt.xlabel("Frequency [Hz]")
     plt.ylabel("Magnitude")
     plt.grid(True, which='both')
     plt.legend()
     plt.title("Transfer Function Comparison")
+    #plt.savefig('figures/transfer_function_comparison.png')
     plt.show()
 
