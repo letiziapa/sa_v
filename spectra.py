@@ -45,9 +45,10 @@ T = 1768 #since we have removed the first 2000 samples, the signal duration is r
 t = np.linspace(0, T, len(seism)) #time vector
 
 #parameter to be used in the time evolution
-dt = 0.001 #time step
+dt = 0.002 #time step
 
-
+window = np.hanning(len(seism)) #Hanning window to remove spectral leakage
+ #apply the window to the seismic data
 #take the fourier transform of the data
 ftransform = np.fft.fft(seism)
 
@@ -57,15 +58,14 @@ frequencies = np.fft.fftfreq(len(seism), d = 1/62.5)
     
 X_f = np.zeros_like(ftransform, dtype=complex) #create an array of zeros with the same shape as V
 nonzero = frequencies != 0 #boolean mask: true if freq is not zero
-#nonzero = freq != 0 #boolean mask: true if freq is not zero
-#for all non-zero frequencies, divide the FT by 2 pi f the take the IFT to get the displacement
+# #nonzero = freq != 0 #boolean mask: true if freq is not zero
+# #for all non-zero frequencies, divide the FT by 2 pi f the take the IFT to get the displacement
 X_f[nonzero] = ftransform[nonzero] / (1j * 2 * np.pi * frequencies[nonzero])
-##X_f[nonzero] = ftransform[nonzero] / (1j * 2 * np.pi * freq[nonzero])
+#disp = ftransform / (1j * 2 * np.pi * (frequencies))
 zt = np.fft.ifft(X_f)
 
 #multiply the FT by 2 pi f then take the IFT to get the acceleration
 acc = ftransform * (frequencies * 2 * np.pi * 1j)
-#acc = ftransform * (freq * 2 * np.pi * 1j)
 At = np.fft.ifft(acc)
 
 
@@ -155,7 +155,7 @@ def evolution(evol_method, Nt_step, dt, physical_params, signal_params,
             np.array(v5), np.array(v6), np.array(x1), np.array(x2),
             np.array(x3), np.array(x4), np.array(x5), np.array(x6))
 
-Nt_step = At.size  # temporal steps
+Nt_step = seism.size  # temporal steps
 
 #physical parameters of the system
 gamma = [5, 5, 5, 5, 5]  # viscous friction coeff [kg/m*s]
@@ -165,7 +165,7 @@ K = [700, 1500, 3300, 1500, 3400, 564]  # spring constant [N/m]
 F = force_function
 
 freq = np.linspace(1e-3, 3e1, 110500) #frequency vector based on frequencies range from spectra
-wn = 2*np.pi*freq
+wn = 2*np.pi*frequencies
 
 # Simulation 
 physical_params = [*M, *K, *gamma, dt]
@@ -181,16 +181,31 @@ Tf, poles = TransferFunc(wn, *M, *K, *gamma)
 H = (np.real(Tf) ** 2 + np.imag(Tf) ** 2) ** (1 / 2)
 
 #apply a Hanning window to the data to remove spectral leakage
-window = np.hanning(len(seism))
+window = np.hanning(len(zt))
 #input in frequency domain
 xf_in = np.fft.fft(zt*window)
 #output in frequency domain
 xf_out = np.fft.fft(x6*window)
 
 # Experimental transfer function
-#H_exp = xf_out / xf_in
-trfn = xf_out/xf_in
+
+#trfn = xf_out/xf_in
+#Hfn = (np.real(trfn) ** 2 + np.imag(trfn) ** 2) ** (1 / 2)
+
+
+#only keep positive frequencies
+#the frequencies array is symmetric, so we only need the first half
+half = Nt_step // 2
+xf_in = xf_in[:half]
+xf_out = xf_out[:half]
+frequencies = frequencies[:half]
+
+
+# Compute transfer function and its magnitude
+trfn = xf_out / xf_in
 Hfn = (np.real(trfn) ** 2 + np.imag(trfn) ** 2) ** (1 / 2)
+Hfn_mag = np.abs(Hfn)
+
 
 if __name__ == '__main__':
     #print the structure of the dataset
@@ -254,7 +269,7 @@ if __name__ == '__main__':
     #plt.plot(freq, H[0], linestyle='-', linewidth=1, marker='', color='steelblue', label='output $x_1$')
     plt.plot(freq, H[5], linestyle='-', linewidth=1, marker='', color='steelblue', label='output $x_{pl}$')
     plt.legend()
-    #plt.savefig('figures/transfer_function_no_control.png')
+    plt.savefig('figures/FREQARRAY_transfer_function_no_control.png')
     fig = plt.figure(figsize=(5, 5))
     plt.title('Time evolution', size=13)
     plt.xlabel('Time [s]', size=12)
@@ -272,13 +287,13 @@ if __name__ == '__main__':
     #plt.savefig('figures/time_evolution.png')
 
     plt.figure(figsize=(8, 5))
-    plt.loglog(freq, H[5], label="Theoretical TF", color="blue")
-    plt.loglog(freq, np.abs(Hfn), label="Experimental TF", color="red", alpha=0.7)
+    plt.loglog(frequencies, H[5][:half], label="Theoretical TF", color="blue")
+    plt.loglog(frequencies, Hfn_mag, label="Experimental TF", color="red", alpha=0.7)
     plt.xlabel("Frequency [Hz]")
     plt.ylabel("Magnitude")
     plt.grid(True, which='both')
     plt.legend()
     plt.title("Transfer Function Comparison")
-    #plt.savefig('figures/transfer_function_comparison.png')
+    plt.savefig('figures/FREQARRAYtransfer_function_comparison.png')
     plt.show()
 
