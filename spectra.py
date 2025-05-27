@@ -5,6 +5,7 @@ import h5py
 from scipy import signal
 from scipy.signal import butter, filtfilt
 from noControl import matrix, TransferFunc, AR_model
+from scipy.interpolate import interp1d
 
 #structure of the hdf5 object 
 def print_hdf5_structure(obj, indent=0):
@@ -32,10 +33,11 @@ channels = ['V1:Sa_' + tower + '_F0_LVDT_V_500Hz',
             #not considering F7
 
 #required data
+#f = h5py.File("SaSR_test.hdf5", "r")
 f = h5py.File("SaSR_test.hdf5", "r")
 dset = f['SR/V1:ENV_CEB_SEIS_V_dec']
 seism = f['SR/V1:ENV_CEB_SEIS_V_dec'][:] #seismic data
-seism = seism[2000:]  #remove the first 2000 samples
+seism = (seism[2000:])*1e-6  #remove the first 2000 samples 
 
 #constants
 nperseg = 2 ** 16 #samples per segment (useful for the PSD)
@@ -44,7 +46,7 @@ T = 1768 #since we have removed the first 2000 samples, the signal duration is r
 t = np.linspace(0, T, len(seism)) #time vector
 
 #parameter to be used in the time evolution
-dt = 0.0015 #time step
+dt = 1e-3 #time step
 
 #window = np.hanning(len(seism)) #Hanning window to remove spectral leakage
  #apply the window to the seismic data
@@ -110,12 +112,12 @@ def evolution(evol_method, Nt_step, dt, physical_params, signal_params,
     """
     # Initialize the problem
     tmax = Nt_step * dt  # maximum time
-    # tt = np.arange(0, tmax, dt)  # time grid
-    tt = np.arange(0, 1768, 1/62.5) #time grid based on the sampling frequency
+    tt = np.arange(0, tmax, dt)  # time grid
+    #tt = np.arange(0, T, 1/62.5) #time grid based on the sampling frequency
     y0 = np.array(
         (0, 0, 0, 0, 0, 0, 0., 0., 0., 0., 0., 0.))  # initial condition
     y_t = np.copy(y0)  # create a copy to evolve it in time
-    print(f"tt: {len(tt)}")
+    #run the simulation on the finer time grid
     F_signal = F(tt, *signal_params)  # external force applied over time (cambia)
 
 
@@ -156,8 +158,8 @@ def evolution(evol_method, Nt_step, dt, physical_params, signal_params,
             np.array(v5), np.array(v6), np.array(x1), np.array(x2),
             np.array(x3), np.array(x4), np.array(x5), np.array(x6))
 
-Nt_step = seism.size  # temporal steps
-
+# temporal steps (for simulation)
+Nt_step = 1768000
 #physical parameters of the system
 gamma = [5, 5, 5, 5, 5]  # viscous friction coeff [kg/m*s]
 M = [160, 125, 120, 110, 325, 82]  # filter mass [Kg]
@@ -165,13 +167,27 @@ K = [700, 1500, 3300, 1500, 3400, 564]  # spring constant [N/m]
 
 F = force_function
 
-freq = np.linspace(1e-3, 3e1, 110500) #frequency vector based on frequencies range from spectra
 wn = 2*np.pi*frequencies[:half]
 
 # Simulation 
 physical_params = [*M, *K, *gamma, dt]
+
+# Interpolate the acceleration onto the simulation time grid
+# Time vector for seismic data (real data)
+tt_data = np.arange(0, T, 1 / 62.5)  # T = 1768
+
+# Time vector for simulation
+tmax = Nt_step * dt  
+tt_sim = np.arange(0, tmax, dt)
+
+# Interpolation
+interp_acc = interp1d(tt_data, At, kind='linear', bounds_error=False, fill_value=0.0)
+At_interp = interp_acc(tt_sim)
+
+
 simulation_params = [AR_model, Nt_step, dt] 
-signal_params = [M[0], At] 
+#signal_params = [M[0], At] 
+signal_params = [M[0], At_interp] 
 
 tt, v1, v2, v3, v4, v5, v6, x1, x2, x3, x4, x5, x6 = (
                         evolution(*simulation_params, physical_params, signal_params,
@@ -184,12 +200,14 @@ H = (np.real(Tf) ** 2 + np.imag(Tf) ** 2) ** (1 / 2)
 #apply a Hanning window to the data to remove spectral leakage
 window = np.hanning(len(zt))
 
-#input in frequency domain
+# #input in frequency domain
 xf_in = np.fft.fft(zt*window)
 
-#output in frequency domain
-xf_out = np.fft.fft(x6*window)
-
+interp_x6 = interp1d(tt_sim, x6, kind='linear', bounds_error=False, fill_value=0.0)
+x6_resampled = interp_x6(tt_data)
+# #output in frequency domain
+#xf_out = np.fft.fft(x6)
+xf_out = np.fft.fft(x6_resampled*window)
 # Experimental transfer function
 
 #only keep positive frequencies
@@ -211,49 +229,49 @@ if __name__ == '__main__':
     print_items(dset)
     
     #plot velocity and displacement (time domain)
-    plt.figure(figsize=(8, 6))
-    plt.suptitle('Seisimic data (V1:ENV_CEB_SEIS_V_dec)', fontsize=16, y = 0.95)
+    # plt.figure(figsize=(8, 6))
+    # plt.suptitle('Seisimic data (V1:ENV_CEB_SEIS_V_dec)', fontsize=16, y = 0.95)
 
-    plt.subplot(2, 1, 1)
-    plt.plot(t, seism, label='Velocity')
-    plt.ylabel('Amplitude [m/s]')
-    plt.legend()
-    plt.grid()
+    # plt.subplot(2, 1, 1)
+    # plt.plot(tt, seism, label='Velocity')
+    # plt.ylabel('Amplitude [m/s]')
+    # plt.legend()
+    # plt.grid()
     
-    plt.subplot(2, 1, 2)
-    plt.plot(t, zt.real, label='Displacement', color='darkorange')
-    plt.ylabel('Amplitude [m]')
-    plt.legend()
-    plt.grid()
-    plt.xlabel('Time [s]')
-    #plt.savefig('figures/velocity_displacement.png')
+    # plt.subplot(2, 1, 2)
+    # plt.plot(tt, zt.real, label='Displacement', color='darkorange')
+    # plt.ylabel('Amplitude [m]')
+    # plt.legend()
+    # plt.grid()
+    # plt.xlabel('Time [s]')
+    # #plt.savefig('figures/velocity_displacement.png')
 
-    plt.figure(figsize=(14, 4))
+    # plt.figure(figsize=(14, 4))
 
-    plt.suptitle('Amplitude spectra', fontsize=16)
+    # plt.suptitle('Amplitude spectra', fontsize=16)
 
-    plt.subplot(1, 3, 1)
-    plt.loglog(fVel, np.sqrt(psdVel), label='Velocity')
-    plt.ylabel('Amplitude [m/s/$\sqrt{Hz}$]')
-    plt.xlabel('Frequency [Hz]')
-    plt.grid(which = 'both', axis = 'both')
-    plt.legend()
+    # plt.subplot(1, 3, 1)
+    # plt.loglog(fVel, np.sqrt(psdVel), label='Velocity')
+    # plt.ylabel('Amplitude [m/s/$\sqrt{Hz}$]')
+    # plt.xlabel('Frequency [Hz]')
+    # plt.grid(which = 'both', axis = 'both')
+    # plt.legend()
 
-    plt.subplot(1, 3, 2)
-    plt.loglog(fZ, np.sqrt(psdZ), label='Displacement', color='darkorange')
-    plt.ylabel('Amplitude [m/$\sqrt{Hz}$]')
-    plt.xlabel('Frequency [Hz]')
-    plt.grid(which = 'both', axis = 'both')
-    plt.legend()
+    # plt.subplot(1, 3, 2)
+    # plt.loglog(fZ, np.sqrt(psdZ), label='Displacement', color='darkorange')
+    # plt.ylabel('Amplitude [m/$\sqrt{Hz}$]')
+    # plt.xlabel('Frequency [Hz]')
+    # plt.grid(which = 'both', axis = 'both')
+    # plt.legend()
 
-    plt.subplot(1, 3, 3)
-    plt.loglog(fAcc, np.sqrt(psdAcc), label ='Acceleration', color='green')
-    plt.ylabel('Amplitude [m/s$^2$/$\sqrt{Hz}$]')
-    plt.xlabel('Frequency [Hz]')
-    plt.grid(which = 'both', axis = 'both')
-    plt.legend()
-    plt.tight_layout()
-    #plt.savefig('figures/amplitude_spectra.png')
+    # plt.subplot(1, 3, 3)
+    # plt.loglog(fAcc, np.sqrt(psdAcc), label ='Acceleration', color='green')
+    # plt.ylabel('Amplitude [m/s$^2$/$\sqrt{Hz}$]')
+    # plt.xlabel('Frequency [Hz]')
+    # plt.grid(which = 'both', axis = 'both')
+    # plt.legend()
+    # plt.tight_layout()
+    # #plt.savefig('figures/amplitude_spectra.png')
 
     fig = plt.figure(figsize=(9, 5))
     plt.title('Transfer function without control', size=13)
@@ -280,7 +298,7 @@ if __name__ == '__main__':
     #plt.plot(tt, x3, linestyle='-', linewidth=1, marker='', color='red', label='x3, M$_3$')
     #plt.plot(tt, x4, linestyle='-', linewidth=1, marker='', color='green', label='x4, M$_4$')
     #plt.plot(tt, x5, linestyle='-', linewidth=1, marker='', color='darkmagenta', label='x7, M$_7$')
-    plt.plot(tt, x6, linestyle='-', linewidth=1, marker='',color='blue', label='x$_{out}$, M$_{out}$') #ultima massa
+    plt.plot(tt_sim, x6, linestyle='-', linewidth=1, marker='',color='blue', label='x$_{out}$, M$_{out}$') #ultima massa
     plt.legend()
     #plt.savefig('figures/time_evolution.png')
 
@@ -292,6 +310,38 @@ if __name__ == '__main__':
     plt.grid(True, which='both')
     plt.legend()
     plt.title("Transfer Function Comparison")
-    #plt.savefig('figures/FREQARRAYtransfer_function_comparison.png')
+    plt.savefig('figures/transfer_function_comparison_new.png')
+
+    # plt.figure(figsize=(10, 4))
+    # plt.plot(tt_data, zt.real, label='Top displacement (zt)', color='darkorange')
+    # plt.plot(tt_data, x6_resampled, label='Bottom displacement (x6)', color='steelblue', alpha=0.7)
+    # plt.xlabel("Time [s]")
+    # plt.ylabel("Displacement [m]")
+    # plt.title("Top vs Bottom Displacement (Time Domain)")
+    # plt.legend()
+    # plt.grid(True)
+    # plt.tight_layout()
+
+    # plt.figure(figsize=(10, 5))
+
+# # Frequency axis (must match FFT length)
+    
+#     freq_pos = frequencies[:half]
+
+# # Magnitudes
+#     mag_in = np.abs(xf_in)
+#     mag_out = np.abs(xf_out)
+
+# # Plot
+#     plt.loglog(freq_pos, mag_in, label='Input (zt)', color='darkorange')
+#     plt.loglog(freq_pos, mag_out, label='Output (x6)', color='steelblue', alpha=0.7)
+#     plt.xlabel("Frequency [Hz]")
+#     plt.ylabel("Magnitude")
+#     plt.title("FFT Magnitudes: zt vs x6_resampled")
+#     plt.grid(True, which='both', ls='--', alpha=0.5)
+#     plt.legend()
+#     plt.tight_layout()
+
+
     plt.show()
 
