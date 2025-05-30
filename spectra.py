@@ -219,8 +219,8 @@ v6_interp = interp1d(tt_sim, v6, kind='linear', bounds_error=False, fill_value=0
 #xf_out = np.fft.fft(x6_interp)
 #xf_out = np.fft.fft(x6_resampled*window)
 # Experimental transfer function
-force = F(tt_sim, M[0], At_interp)  # external force applied over time
-force_interp = interp1d(tt_sim, force, kind='linear', bounds_error=False, fill_value=0.0)(tt_data)
+force = F(tt_data, M[0], At)  # external force applied over time
+#force_interp = interp1d(tt_sim, force, kind='linear', bounds_error=False, fill_value=0.0)(tt_data)
 
 #only keep positive frequencies
 #the frequencies array is symmetric, so we only need the first half
@@ -232,7 +232,7 @@ vf_in = np.fft.fft(seism)  # input signal (seismic data)
 vf_out = np.fft.fft(v6_interp)  # output signal (v6)
 #trfn = vf_out / vf_in
 # # Compute transfer function and its magnitude
-trfn = xf_out / np.fft.fft(force_interp*window) # experimental transfer function
+trfn = xf_out / np.fft.fft(force*window) # experimental transfer function
 # trfn = (vf_out)/vf_in
 Hfn = (np.real(trfn) ** 2 + np.imag(trfn) ** 2) ** (1 / 2)
 Hfn_mag = np.abs(Hfn)
@@ -328,7 +328,7 @@ if __name__ == '__main__':
     plt.grid(True, which='both')
     plt.legend()
     plt.title("Transfer Function Comparison")
-    plt.savefig('figures/NUOVAtransfer_function_comparison.png')
+    #plt.savefig('figures/NUOVAtransfer_function_comparison.png')
 
     # plt.figure(figsize=(10, 5))
     # #plt.plot(tt_sim, vout_time_domain, label='Output (vout)', color='steelblue')
