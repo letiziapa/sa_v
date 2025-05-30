@@ -2,10 +2,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import signal
 import h5py
-from scipy import signal
+from scipy import signal, differentiate
 from scipy.signal import butter, filtfilt
 from noControl import matrix, TransferFunc, AR_model
 from scipy.interpolate import interp1d
+import scipy.integrate
+
+np.random.seed(42)
 
 #structure of the hdf5 object 
 def print_hdf5_structure(obj, indent=0):
@@ -38,6 +41,12 @@ f = h5py.File("SaSR_test.hdf5", "r")
 dset = f['SR/V1:ENV_CEB_SEIS_V_dec']
 seism = f['SR/V1:ENV_CEB_SEIS_V_dec'][:] #seismic data
 seism = (seism[2000:])*1e-6  #remove the first 2000 samples 
+#seism = seism *1e-6
+# modify the seismic data to add a noisy complex component zbar
+sigma = 1/np.sqrt(2) #standard deviation of the noise
+zbar = np.random.normal(0, sigma, len(seism)) + 1j * np.random.normal(0, sigma, len(seism))
+#phases = np.exp(1j * 2 * np.pi * np.random.rand(len(seism))) #random phases
+#seism = seism * zbar #add noise to the seismic data (in time domain or frequency domain?)
 
 #constants
 nperseg = 2 ** 16 #samples per segment (useful for the PSD)
@@ -52,9 +61,7 @@ dt = 1e-3 #time step
  #apply the window to the seismic data
 #take the fourier transform of the data
 ftransform = np.fft.fft(seism)
-
-#multiply the FT by 2 pi f
-#freq = np.linspace(1e-3, 3e1, 110500)
+#ftransform = ftransform * zbar
 
 frequencies = np.fft.fftfreq(len(seism), d = 1/62.5)
 half = len(frequencies) // 2 #half of the frequencies array (positive frequencies only)
@@ -64,7 +71,6 @@ nonzero = frequencies != 0 #boolean mask: true if freq is not zero
 # #nonzero = freq != 0 #boolean mask: true if freq is not zero
 # #for all non-zero frequencies, divide the FT by 2 pi f the take the IFT to get the displacement
 X_f[nonzero] = ftransform[nonzero] / (1j * 2 * np.pi * frequencies[nonzero])
-
 zt = np.fft.ifft(X_f)
 
 #multiply the FT by 2 pi f then take the IFT to get the acceleration
@@ -74,7 +80,7 @@ At = np.fft.ifft(acc)
 
 #calculate the PSDs to plot the velocity and acceleration spectra
 fAcc, psdAcc = signal.welch(At.real, fs = 62.5, window='hann', nperseg=nperseg)
-fVel, psdVel = signal.welch(seism, fs = 62.5, window='hann', nperseg=nperseg)
+fVel, psdVel = signal.welch(seism.real, fs = 62.5, window='hann', nperseg=nperseg)
 fZ, psdZ = signal.welch(zt.real, fs = 62.5, window='hann', nperseg=nperseg)
 
 
@@ -113,6 +119,7 @@ def evolution(evol_method, Nt_step, dt, physical_params, signal_params,
     # Initialize the problem
     tmax = Nt_step * dt  # maximum time
     tt = np.arange(0, tmax, dt)  # time grid
+    #print(len(tt), 'time steps')  # number of time steps
     #tt = np.arange(0, T, 1/62.5) #time grid based on the sampling frequency
     y0 = np.array(
         (0, 0, 0, 0, 0, 0, 0., 0., 0., 0., 0., 0.))  # initial condition
@@ -169,16 +176,17 @@ F = force_function
 
 wn = 2*np.pi*frequencies[:half]
 
-# Simulation 
 physical_params = [*M, *K, *gamma, dt]
 
 # Interpolate the acceleration onto the simulation time grid
 # Time vector for seismic data (real data)
-tt_data = np.arange(0, T, 1 / 62.5)  # T = 1768
+tt_data = np.arange(0, T, 1 / 62.5)  
 
 # Time vector for simulation
 tmax = Nt_step * dt  
 tt_sim = np.arange(0, tmax, dt)
+print(len(tt_sim), 'time steps for simulation')
+print(tmax, 'max time for simulation')
 
 # Interpolation
 interp_acc = interp1d(tt_data, At, kind='linear', bounds_error=False, fill_value=0.0)
@@ -194,57 +202,67 @@ tt, v1, v2, v3, v4, v5, v6, x1, x2, x3, x4, x5, x6 = (
                         F, file_name = None))
 
 Tf, poles = TransferFunc(wn, *M, *K, *gamma)
+
+
 # Compute the magnitude of the transfer function (from simulation)
 H = (np.real(Tf) ** 2 + np.imag(Tf) ** 2) ** (1 / 2)
-
+print(len(x6), 'x6 Number of samples')
 #apply a Hanning window to the data to remove spectral leakage
-window = np.hanning(len(zt))
+window = np.hanning(len(seism))
 
-# #input in frequency domain
-xf_in = np.fft.fft(zt*window)
-
-interp_x6 = interp1d(tt_sim, x6, kind='linear', bounds_error=False, fill_value=0.0)
-x6_resampled = interp_x6(tt_data)
-# #output in frequency domain
-#xf_out = np.fft.fft(x6)
-xf_out = np.fft.fft(x6_resampled*window)
+x6_interp = interp1d(tt_sim, x6, kind='linear', bounds_error=False, fill_value=0.0)(tt_data)
+v6_interp = interp1d(tt_sim, v6, kind='linear', bounds_error=False, fill_value=0.0)(tt_data)
+# vf_out = np.fft.fft(v6_interp*window)  # output signal (v6)
+# vf_in = np.fft.fft(seism*window)  # input signal (seismic data)
+# #output in frequency domain (resampled to match the data time vector)
+#xf_in = np.fft.fft(X_f)  # input signal (zt)
+#xf_out = np.fft.fft(x6_interp)
+#xf_out = np.fft.fft(x6_resampled*window)
 # Experimental transfer function
+force = F(tt_sim, M[0], At_interp)  # external force applied over time
+force_interp = interp1d(tt_sim, force, kind='linear', bounds_error=False, fill_value=0.0)(tt_data)
 
 #only keep positive frequencies
 #the frequencies array is symmetric, so we only need the first half
+xf_in = np.fft.fft(zt * window)
 xf_in = xf_in[:half]
-xf_out = xf_out[:half]
-
-
-
-# Compute transfer function and its magnitude
-trfn = xf_out / xf_in
+xf_out = np.fft.fft(x6_interp*window)
+#xf_out = xf_out[:half]
+vf_in = np.fft.fft(seism)  # input signal (seismic data)
+vf_out = np.fft.fft(v6_interp)  # output signal (v6)
+#trfn = vf_out / vf_in
+# # Compute transfer function and its magnitude
+trfn = xf_out / np.fft.fft(force_interp*window) # experimental transfer function
+# trfn = (vf_out)/vf_in
 Hfn = (np.real(trfn) ** 2 + np.imag(trfn) ** 2) ** (1 / 2)
 Hfn_mag = np.abs(Hfn)
 
-
+# xout_frequency_domain = trfn * X_f
+# xout_time_domain = np.fft.ifft(xout_frequency_domain)
+#vout_frequency_domain = vf_in * trfn # output in frequency domain (vout)
+#vout_time_domain = np.fft.ifft(vout_frequency_domain)
 if __name__ == '__main__':
     #print the structure of the dataset
     print_hdf5_structure(f)
     print_items(dset)
     
     #plot velocity and displacement (time domain)
-    # plt.figure(figsize=(8, 6))
-    # plt.suptitle('Seisimic data (V1:ENV_CEB_SEIS_V_dec)', fontsize=16, y = 0.95)
+    plt.figure(figsize=(8, 6))
+    plt.suptitle('Seisimic data (V1:ENV_CEB_SEIS_V_dec)', fontsize=16, y = 0.95)
 
-    # plt.subplot(2, 1, 1)
-    # plt.plot(tt, seism, label='Velocity')
-    # plt.ylabel('Amplitude [m/s]')
-    # plt.legend()
-    # plt.grid()
+    plt.subplot(2, 1, 1)
+    plt.plot(tt_data, seism, label='Velocity')
+    plt.ylabel('Amplitude [m/s]')
+    plt.legend()
+    plt.grid()
     
-    # plt.subplot(2, 1, 2)
-    # plt.plot(tt, zt.real, label='Displacement', color='darkorange')
-    # plt.ylabel('Amplitude [m]')
-    # plt.legend()
-    # plt.grid()
-    # plt.xlabel('Time [s]')
-    # #plt.savefig('figures/velocity_displacement.png')
+    plt.subplot(2, 1, 2)
+    plt.plot(tt_data, zt.real, label='Displacement', color='darkorange')
+    plt.ylabel('Amplitude [m]')
+    plt.legend()
+    plt.grid()
+    plt.xlabel('Time [s]')
+    #plt.savefig('figures/velocity_displacement.png')
 
     # plt.figure(figsize=(14, 4))
 
@@ -271,7 +289,7 @@ if __name__ == '__main__':
     # plt.grid(which = 'both', axis = 'both')
     # plt.legend()
     # plt.tight_layout()
-    # #plt.savefig('figures/amplitude_spectra.png')
+    #plt.savefig('figures/amplitude_spectra.png')
 
     fig = plt.figure(figsize=(9, 5))
     plt.title('Transfer function without control', size=13)
@@ -283,7 +301,7 @@ if __name__ == '__main__':
     plt.minorticks_on()
 
     #plt.plot(freq, H[0], linestyle='-', linewidth=1, marker='', color='steelblue', label='output $x_1$')
-    plt.plot(frequencies[:half], H[5][:half], linestyle='-', linewidth=1, marker='', color='steelblue', label='output $x_{pl}$')
+    plt.plot(abs(frequencies)[:half], H[5], linestyle='-', linewidth=1, marker='', color='steelblue', label='output $x_{pl}$')
     plt.legend()
     #plt.savefig('figures/FREQARRAY_transfer_function_no_control.png')
     fig = plt.figure(figsize=(8, 5))
@@ -303,15 +321,21 @@ if __name__ == '__main__':
     #plt.savefig('figures/time_evolution.png')
 
     plt.figure(figsize=(8, 5))
-    plt.loglog(frequencies[:half], H[5], label="Theoretical TF", color="blue")
-    plt.loglog(frequencies[:half], Hfn_mag, label="Experimental TF", color="red", alpha=0.7)
+    plt.loglog(abs(frequencies)[:half], H[5][:half], label="Theoretical TF", color="blue")
+    plt.loglog(abs(frequencies),abs(trfn), label="Experimental TF", color="red", alpha=0.7)
     plt.xlabel("Frequency [Hz]")
     plt.ylabel("Magnitude")
     plt.grid(True, which='both')
     plt.legend()
     plt.title("Transfer Function Comparison")
-    plt.savefig('figures/transfer_function_comparison_new.png')
+    plt.savefig('figures/NUOVAtransfer_function_comparison.png')
 
+    # plt.figure(figsize=(10, 5))
+    # #plt.plot(tt_sim, vout_time_domain, label='Output (vout)', color='steelblue')
+    # #plt.plot(tt_sim, vout_time_domain, label='Output (vout)', color='steelblue')
+
+    # plt.plot(tt_sim, v6_interp, label='Output (v6)', color='darkorange', alpha=0.7)
+    # plt.legend()
     # plt.figure(figsize=(10, 4))
     # plt.plot(tt_data, zt.real, label='Top displacement (zt)', color='darkorange')
     # plt.plot(tt_data, x6_resampled, label='Bottom displacement (x6)', color='steelblue', alpha=0.7)
